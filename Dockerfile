@@ -7,7 +7,7 @@ ARG ENVOY_VERSION=v1.37.1
 FROM envoyproxy/envoy:contrib-${ENVOY_VERSION} AS builder
 
 ARG CORAZA_VERSION=v1.3.0
-ARG GO_VERSION=1.26.1
+ARG GO_VERSION=1.25.8
 # TARGETARCH is injected automatically by docker buildx (amd64 / arm64)
 ARG TARGETARCH=amd64
 
