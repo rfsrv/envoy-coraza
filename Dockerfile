@@ -2,26 +2,27 @@
 # when bumping: update both ARGs, commit, then tag as
 #   envoy-{ENVOY_VERSION}-coraza-{CORAZA_VERSION}  (e.g. envoy-v1.37.1-coraza-v1.3.0)
 ARG ENVOY_VERSION=v1.37.1
+ARG GO_VERSION=1.25.8
 
 # --- Build stage ---
-FROM envoyproxy/envoy:contrib-${ENVOY_VERSION} AS builder
+# Use a dedicated Go image so we get a native Go toolchain + proper cross-compilers.
+# The build always runs on the native runner arch; TARGETARCH controls the output.
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS builder
 
 ARG CORAZA_VERSION=v1.3.0
-ARG GO_VERSION=1.25.8
-# TARGETARCH is injected automatically by docker buildx (amd64 / arm64)
-ARG TARGETARCH=amd64
+# TARGETARCH / TARGETOS injected by docker buildx (amd64 / arm64)
+ARG TARGETARCH
+ARG TARGETOS=linux
 
+# Install cross-compilers for CGO builds targeting the non-native arch.
+# Both are installed; only the one matching TARGETARCH is actually used.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl tar ca-certificates gcc g++ \
+        ca-certificates curl tar \
+        gcc-x86-64-linux-gnu g++-x86-64-linux-gnu \
+        gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Go from official tarball (handles any version, any arch)
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
-      | tar -xz -C /usr/local
-
-ENV PATH="/usr/local/go/bin:$PATH" \
-    GOPATH="/go" \
-    CGO_ENABLED=1
+ENV CGO_ENABLED=1
 
 # Fetch coraza-envoy-go-filter source at pinned version
 RUN mkdir /src && \
@@ -30,8 +31,13 @@ RUN mkdir /src && \
 
 WORKDIR /src
 
-# Standard build — pure-Go re2/libinjection, no CGO runtime deps
-RUN go build \
+# Cross-compile the Go filter shared library.
+# Set CC to the correct cross-compiler based on TARGETARCH.
+RUN case "${TARGETARCH}" in \
+      amd64) export CC=x86_64-linux-gnu-gcc CXX=x86_64-linux-gnu-g++ ;; \
+      arm64) export CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ ;; \
+    esac && \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
       -o /coraza-waf.so \
       -buildmode=c-shared \
       -tags="coraza.rule.multiphase_evaluation,memoize_builders" \
